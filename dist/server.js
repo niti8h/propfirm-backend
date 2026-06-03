@@ -50,6 +50,8 @@ app.use(globalLimiter);
 // Auth
 app.post("/api/auth/signup", authLimiter, (0, validate_1.validate)(auth_schema_1.signupSchema), auth_1.signup);
 app.post("/api/auth/login", authLimiter, (0, validate_1.validate)(auth_schema_1.loginSchema), auth_1.login);
+app.post("/api/auth/forgot-password", authLimiter, (0, validate_1.validate)(auth_schema_1.forgotPasswordSchema), auth_1.forgotPassword);
+app.post("/api/auth/reset-password", authLimiter, (0, validate_1.validate)(auth_schema_1.resetPasswordSchema), auth_1.resetPassword);
 // Challenges List (Public frontend pricing grid)
 app.get("/api/challenges", async (req, res) => {
     try {
@@ -74,16 +76,19 @@ app.get("/api/markets/binance-tickers", async (req, res) => {
     try {
         const { stdout } = await execAsync("curl -s https://api.binance.com/api/v3/ticker/price");
         const tickers = JSON.parse(stdout);
+        if (!Array.isArray(tickers)) {
+            throw new Error("Binance API returned non-array response");
+        }
         const filtered = tickers.filter((t) => t.symbol.endsWith("USDT"));
         return res.json(filtered);
     }
     catch (err) {
-        console.error("Binance Fetch Error:", err);
+        console.error("Binance Fetch Error:", err.message || err);
         // If request fails or offline, fallback to in-memory ticks
         const fallback = [
             { symbol: "BTCUSDT", price: binanceSync_1.priceMap.get("BTCUSDT")?.toString() || "65000.00" },
             { symbol: "ETHUSDT", price: binanceSync_1.priceMap.get("ETHUSDT")?.toString() || "3400.00" },
-            { symbol: "SOLUSDT", price: err.message || "160.00" },
+            { symbol: "SOLUSDT", price: binanceSync_1.priceMap.get("SOLUSDT")?.toString() || "160.00" },
         ];
         return res.json(fallback);
     }

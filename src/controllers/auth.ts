@@ -183,3 +183,72 @@ export async function getUserProfile(req: Request, res: Response) {
     return res.status(500).json({ error: "Failed to fetch profile." });
   }
 }
+
+import crypto from "crypto";
+
+export async function forgotPassword(req: Request, res: Response) {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email is required." });
+    
+    const user = await prisma.user.findUnique({ where: { email: email.toLowerCase().trim() } });
+    if (!user) {
+      // Always return success to prevent email enumeration
+      return res.status(200).json({ message: "If an account exists, a reset link has been generated." });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenExpiry = new Date(Date.now() + 3600000); // 1 hour
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        resetToken,
+        resetTokenExpiry,
+      },
+    });
+
+    const resetLink = `http://localhost:3000/reset-password?token=${resetToken}`;
+    console.log(`\n\n=== PASSWORD RESET LINK ===\nUser: ${user.email}\nLink: ${resetLink}\n===========================\n\n`);
+
+    return res.status(200).json({ message: "If an account exists, a reset link has been generated." });
+  } catch (error) {
+    console.error("Forgot password error:", error);
+    return res.status(500).json({ error: "Failed to process request." });
+  }
+}
+
+export async function resetPassword(req: Request, res: Response) {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) return res.status(400).json({ error: "Token and new password are required." });
+
+    const user = await prisma.user.findFirst({
+      where: {
+        resetToken: token,
+        resetTokenExpiry: { gte: new Date() },
+      },
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: "Invalid or expired reset token." });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const passwordHash = await bcrypt.hash(newPassword, salt);
+
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        passwordHash,
+        resetToken: null,
+        resetTokenExpiry: null,
+      },
+    });
+
+    return res.status(200).json({ message: "Password has been successfully reset." });
+  } catch (error) {
+    console.error("Reset password error:", error);
+    return res.status(500).json({ error: "Failed to reset password." });
+  }
+}

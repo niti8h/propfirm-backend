@@ -6,7 +6,7 @@ import dotenv from "dotenv";
 import helmet from "helmet";
 import rateLimit from "express-rate-limit";
 import { validate } from "./middlewares/validate";
-import { signupSchema, loginSchema } from "./schemas/auth.schema";
+import { signupSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } from "./schemas/auth.schema";
 import { purchaseChallengeSchema, oxapayWebhookSchema, razorpayWebhookSchema, verifyRazorpaySchema, validateCouponSchema } from "./schemas/payments.schema";
 import { openTradeSchema, closeTradeSchema, cancelPendingOrderSchema, requestUserPayoutSchema } from "./schemas/trading.schema";
 import { createTicketSchema, replyTicketSchema } from "./schemas/support.schema";
@@ -18,7 +18,7 @@ import { startRiskGuardianDaemon } from "./riskGuardian";
 import { initializeWebSocketServer, broadcastTickerUpdate } from "./websocket";
 
 // Controllers
-import { signup, login, authenticateToken, getUserProfile } from "./controllers/auth";
+import { signup, login, authenticateToken, getUserProfile, forgotPassword, resetPassword } from "./controllers/auth";
 import {
   purchaseChallenge,
   handleOxapayCallback,
@@ -107,6 +107,8 @@ app.use(globalLimiter);
 // Auth
 app.post("/api/auth/signup", authLimiter, validate(signupSchema), signup);
 app.post("/api/auth/login", authLimiter, validate(loginSchema), login);
+app.post("/api/auth/forgot-password", authLimiter, validate(forgotPasswordSchema), forgotPassword);
+app.post("/api/auth/reset-password", authLimiter, validate(resetPasswordSchema), resetPassword);
 
 // Challenges List (Public frontend pricing grid)
 app.get("/api/challenges", async (req, res) => {
@@ -135,15 +137,18 @@ app.get("/api/markets/binance-tickers", async (req, res) => {
   try {
     const { stdout } = await execAsync("curl -s https://api.binance.com/api/v3/ticker/price");
     const tickers = JSON.parse(stdout);
+    if (!Array.isArray(tickers)) {
+      throw new Error("Binance API returned non-array response");
+    }
     const filtered = tickers.filter((t: any) => t.symbol.endsWith("USDT"));
     return res.json(filtered);
   } catch (err: any) {
-    console.error("Binance Fetch Error:", err);
+    console.error("Binance Fetch Error:", err.message || err);
     // If request fails or offline, fallback to in-memory ticks
     const fallback = [
       { symbol: "BTCUSDT", price: priceMap.get("BTCUSDT")?.toString() || "65000.00" },
       { symbol: "ETHUSDT", price: priceMap.get("ETHUSDT")?.toString() || "3400.00" },
-      { symbol: "SOLUSDT", price: err.message || "160.00" },
+      { symbol: "SOLUSDT", price: priceMap.get("SOLUSDT")?.toString() || "160.00" },
     ];
     return res.json(fallback);
   }

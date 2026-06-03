@@ -1,0 +1,220 @@
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id               String          @id @default(uuid())
+  fullName         String
+  email            String          @unique
+  passwordHash     String
+  mobile           String?
+  country          String?
+  kycStatus        String          @default("PENDING") // PENDING, APPROVED, REJECTED, NONE
+  isAdmin          Boolean         @default(false)
+  isSuspended      Boolean         @default(false)
+  suspensionReason String?
+  customAffPercent Float?
+  tags             String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  accounts         Account[]
+  tickets          SupportTicket[]
+}
+
+model ChallengeRule {
+  id                    String    @id @default(uuid())
+  type                  String    // INSTANT, ONE_STEP, TWO_STEP
+  tierName              String    // e.g. "$5,000 Challenge", "$100,000 Challenge"
+  size                  Float     // e.g. 5000.0, 100000.0
+  price                 Float     // Cost to buy the challenge (e.g. 49.00, 499.00)
+  profitTargetPercent           Float    // Target profit percentage (e.g., 10.0 for ONE_STEP, 8.0/5.0 for TWO_STEP phase 1/2)
+  stageOneProfitTargetPercent   Float    @default(0.0)
+  stageOneMinTradingDays        Int      @default(0)
+  stageTwoProfitTargetPercent   Float    @default(0.0)
+  stageTwoMinTradingDays        Int      @default(0)
+  fundedMinTradingDays          Int      @default(0)
+  consistencyPercent            Float    @default(15.0)
+  tradingPeriod                 String   @default("Unlimited")
+  dailyDrawdownPercent          Float    // Daily drawdown ceiling percent (e.g., 3.0 for INSTANT/ONE_STEP, 5.0 for TWO_STEP)
+  maxLossPercent                Float    // Absolute max loss percent (e.g., 6.0 for INSTANT/ONE_STEP, 10.0 for TWO_STEP)
+  minTradingDays                Int      @default(3) // Min trading days needed
+  minTradeDurationMinutes       Int      @default(0) // Minimum trade duration rule display
+  leverageCrypto                Float    @default(2.0)   // leverage 1:2
+  leverageForex         Float     @default(100.0) // leverage 1:100
+  leverageCommodities   Float     @default(30.0)  // leverage 1:30
+  active                Boolean   @default(true)
+  accounts              Account[]
+}
+
+model Account {
+  id                 String          @id @default(uuid())
+  userId             String
+  challengeRuleId    String
+  initialBalance     Float
+  balance            Float
+  equity             Float
+  dailyStartBalance  Float         // Recalculated daily at 2 AM UTC
+  dailyStartEquity   Float         // Recalculated daily at 2 AM UTC
+  lastDailySnapshot  DateTime        @default(now())
+  absoluteLossFloor  Float         // Absolute minimum balance/equity before breaching
+  phase              String          @default("PENDING_PAYMENT") // PENDING_PAYMENT, STAGE1, STAGE2, FUNDED, BREACHED, PASSED
+  tradingDaysCount   Int             @default(0)   // Number of active trading days (balance fluctuation >= 0.25% day-over-day)
+  breachReason       String?
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  challengeRule      ChallengeRule   @relation(fields: [challengeRuleId], references: [id])
+  trades             Trade[]
+  payments           Payment[]
+  snapshots          DailySnapshot[]
+  payouts            PayoutRequest[]
+}
+
+model Trade {
+  id                String    @id @default(uuid())
+  accountId         String
+  symbol            String    // BTCUSDT, ETHUSDT, etc.
+  direction         String    // BUY, SELL
+  type              String    // MARKET, LIMIT
+  size              Float     // Lot size or quantity
+  entryPrice        Float
+  exitPrice         Float?
+  triggerPrice      Float?    // Price that triggers execution for LIMIT orders
+  stopLoss          Float?
+  takeProfit        Float?
+  leverage          Float?    // Leverage applied for this specific trade
+  status            String    @default("OPEN") // OPEN, PENDING, CLOSED, CANCELLED
+  grossPnl          Float     @default(0.0)
+  openTime          DateTime  @default(now())
+  closeTime         DateTime?
+  terminationReason String?   // TAKE_PROFIT, STOP_LOSS, FORCE_LIQUIDATED, MANUALLY_CLOSED, CANCELLED
+  account           Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+model DailySnapshot {
+  id         String   @id @default(uuid())
+  accountId  String
+  balance    Float
+  equity     Float
+  timestamp  DateTime @default(now())
+  account    Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+model EmailTemplate {
+  id          String   @id @default(uuid())
+  key         String   @unique // CHALLENGE_PURCHASED, DRAWDOWN_BREACH, MAX_LOSS_BREACH, ACCOUNT_PASSED, PAYOUT_APPROVED
+  subject     String
+  htmlPayload String   // Supports injections like {{Name}}, {{AccountID}}, {{CurrentEquity}}
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Payment {
+  id               String   @id @default(uuid())
+  accountId        String
+  amount           Float
+  currency         String   // USD, INR
+  gateway          String   // OXAPAY, RAZORPAY
+  gatewayInvoiceId String?  @unique
+  status           String   @default("PENDING") // PENDING, COMPLETED, FAILED
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  account          Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+model SystemConfig {
+  id        String   @id @default(uuid())
+  key       String   @unique // OXAPAY_API_KEY, RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, etc.
+  value     String   // Can store encrypted configurations
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ==========================================
+// NEW ADMIN & PLATFORM ADVANCED MODELS
+// ==========================================
+
+model PayoutRequest {
+  id         String   @id @default(uuid())
+  accountId  String
+  amount     Float
+  status     String   @default("PENDING") // PENDING, APPROVED, REJECTED
+  method     String   // CRYPTO, BANK
+  details    String   // Withdrawal address or bank routing numbers
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  account    Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+}
+
+model SupportTicket {
+  id        String           @id @default(uuid())
+  userId    String
+  subject   String
+  category  String           // BILLING, TRADING, RISK, OTHER
+  status    String           @default("OPEN") // OPEN, IN_PROGRESS, CLOSED
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  SupportMessage[]
+}
+
+model SupportMessage {
+  id         String        @id @default(uuid())
+  ticketId   String
+  senderId   String        // User ID or "ADMIN"
+  senderName String
+  message    String
+  createdAt  DateTime      @default(now())
+  ticket     SupportTicket @relation(fields: [ticketId], references: [id], onDelete: Cascade)
+}
+
+model InfluencerCollab {
+  id             String   @id @default(uuid())
+  name           String
+  handleInsta    String?
+  handleYoutube  String?
+  email          String
+  mobile         String
+  country        String
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+model Coupon {
+  id                String   @id @default(uuid())
+  code              String   @unique
+  limitUses         Int
+  usedCount         Int      @default(0)
+  expiryDate        DateTime
+  discountType      String   // FLAT, PERCENT
+  discountValue     Float
+  applicablePlanIds String   // Store JSON array of challenge rule IDs or "ALL"
+  active            Boolean  @default(true)
+  createdAt         DateTime @default(now())
+}
+
+model WebConfig {
+  id        String   @id @default(uuid())
+  key       String   @unique // LOGO, FAVICON, COLORS, FAQ_JSON, PRIVACY_POLICY, TERMS_CONDITIONS
+  value     String   // Stores text, JSON markup strings, or configuration overrides
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Market {
+  id        String   @id @default(uuid())
+  symbol    String   @unique // e.g. BTCUSDT, TRXUSDT
+  name      String   // e.g. Bitcoin, Tron
+  type      String   // CRYPTO, FOREX, COMMODITY
+  logoUrl   String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
